@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Crown Defender TD</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="game-canvas"></canvas>
+
+        <!-- HUD -->
+        <div id="hud" class="hidden">
+            <div id="hud-top">
+                <div id="hud-left-panel">
+                    <div id="castle-info">
+                        <div class="hud-label">Замок</div>
+                        <div class="bar-container castle-bar">
+                            <div id="castle-hp-bar" class="bar-fill"></div>
+                            <span id="castle-hp-text" class="bar-text"></span>
+                        </div>
+                    </div>
+                    <div id="exp-info">
+                        <div class="bar-container exp-bar">
+                            <div id="exp-bar" class="bar-fill"></div>
+                            <span id="exp-text" class="bar-text"></span>
+                        </div>
+                    </div>
+                </div>
+                <div id="hud-center-panel">
+                    <div id="wave-display">Волна <span id="wave-num">1</span>/30</div>
+                    <div id="enemy-count">Враги: <span id="enemy-num">0</span></div>
+                    <div id="score-display">Счёт: <span id="score-num">0</span></div>
+                </div>
+                <div id="hud-right-panel">
+                    <div id="hero-info">
+                        <div class="hud-label">Герой <span id="hero-level">Ур.1</span></div>
+                        <div class="bar-container hero-bar">
+                            <div id="hero-hp-bar" class="bar-fill"></div>
+                            <span id="hero-hp-text" class="bar-text"></span>
+                        </div>
+                    </div>
+                    <div class="hud-btn-row">
+                        <button id="speed-btn" title="Скорость x2">x1</button>
+                        <button id="pause-btn" title="Пауза">⏸</button>
+                    </div>
+                </div>
+            </div>
+            <div id="upgrades-list"></div>
+        </div>
+
+        <!-- Mobile controls -->
+        <div id="mobile-controls" class="hidden">
+            <div id="joystick-zone">
+                <div id="joystick-base">
+                    <div id="joystick-thumb"></div>
+                </div>
+            </div>
+            <div id="ability-buttons">
+                <button class="ability-btn" id="btn-ability3" data-ability="3">
+                    <span class="ability-icon">🛡</span>
+                    <span class="ability-label">Щит</span>
+                    <div class="cooldown-overlay" id="cd-3"></div>
+                </button>
+                <button class="ability-btn" id="btn-ability2" data-ability="2">
+                    <span class="ability-icon">🌀</span>
+                    <span class="ability-label">Стихия</span>
+                    <div class="cooldown-overlay" id="cd-2"></div>
+                </button>
+                <button class="ability-btn" id="btn-ability1" data-ability="1">
+                    <span class="ability-icon">💨</span>
+                    <span class="ability-label">Рывок</span>
+                    <div class="cooldown-overlay" id="cd-1"></div>
+                </button>
+                <button class="ability-btn attack-btn" id="btn-attack" data-ability="0">
+                    <span class="ability-icon">⚔</span>
+                    <span class="ability-label">Атака</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Start screen -->
+        <div id="start-screen" class="overlay">
+            <div class="overlay-content start-content">
+                <h1 class="game-title">Crown Defender</h1>
+                <div class="title-subtitle">Tower Defense</div>
+                <div id="crown-display" class="hidden">
+                    <div class="crown-icon">👑</div>
+                    <label id="crown-toggle-label">
+                        <input type="checkbox" id="crown-toggle"> Надеть корону
+                    </label>
+                </div>
+                <div id="records">
+                    <div>Лучший счёт: <span id="best-score">0</span></div>
+                    <div>Лучший уровень: <span id="best-level">0</span></div>
+                </div>
+                <button class="btn-primary" id="btn-new-game">Новая игра</button>
+                <button class="btn-secondary" id="btn-continue" style="display:none">Продолжить</button>
+                <button class="btn-danger" id="btn-reset">Сброс сохранений</button>
+            </div>
+        </div>
+
+        <!-- Level up screen -->
+        <div id="levelup-screen" class="overlay hidden">
+            <div class="overlay-content levelup-content">
+                <h2>Выбери усиление</h2>
+                <div id="upgrade-cards"></div>
+                <button class="btn-secondary" id="btn-reroll">
+                    🎲 Перебросить <span id="reroll-cd"></span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Pause screen -->
+        <div id="pause-screen" class="overlay hidden">
+            <div class="overlay-content">
+                <h2>Пауза</h2>
+                <button class="btn-primary" id="btn-resume">Продолжить</button>
+                <button class="btn-danger" id="btn-quit">Выйти в меню</button>
+            </div>
+        </div>
+
+        <!-- Victory screen -->
+        <div id="victory-screen" class="overlay hidden">
+            <div class="overlay-content">
+                <h2>Победа!</h2>
+                <div class="crown-unlock">👑</div>
+                <p>Корона открыта!</p>
+                <div id="victory-score"></div>
+                <button class="btn-primary" id="btn-victory-menu">В меню</button>
+            </div>
+        </div>
+
+        <!-- Defeat screen -->
+        <div id="defeat-screen" class="overlay hidden">
+            <div class="overlay-content">
+                <h2 id="defeat-text">Вы проиграли</h2>
+                <div id="defeat-score"></div>
+                <button class="btn-primary" id="btn-defeat-menu">В меню</button>
+            </div>
+        </div>
+
+        <!-- Wave announcement -->
+        <div id="wave-announce" class="hidden">
+            <div id="wave-announce-text"></div>
+        </div>
+
+        <!-- Damage flash -->
+        <div id="damage-flash" class="hidden"></div>
+    </div>
+
+    <script src="vendor/three.min.js"></script>
+    <script src="game.js"></script>
+</body>
+</html>
