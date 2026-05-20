@@ -37,11 +37,66 @@
     const hudEl = $('hud');
     const mobileCtrl = $('mobile-controls');
 
+    // ─── PORTAL ───
+    function buildPortal() {
+        const portalGroup = new THREE.Group();
+        // The group faces right-to-left (along -X), so children lie in YZ plane by default
+        // We rotate the whole group so "into the portal" = toward the arena
+        portalGroup.rotation.y = Math.PI / 2;
+
+        // Outer ring — the gate frame
+        const outerRing = new THREE.Mesh(
+            new THREE.TorusGeometry(3.2, 0.28, 8, 28),
+            new THREE.MeshBasicMaterial({ color: 0x7030d0 })
+        );
+        portalGroup.add(outerRing);
+
+        // Secondary inner ring (spins independently)
+        const innerRing1 = new THREE.Mesh(
+            new THREE.TorusGeometry(2.3, 0.14, 6, 20),
+            new THREE.MeshBasicMaterial({ color: 0xa060ff })
+        );
+        portalGroup.add(innerRing1);
+
+        // Tertiary innermost ring
+        const innerRing2 = new THREE.Mesh(
+            new THREE.TorusGeometry(1.5, 0.10, 5, 16),
+            new THREE.MeshBasicMaterial({ color: 0xff60ff })
+        );
+        portalGroup.add(innerRing2);
+
+        // Core swirl (small, fast-spinning)
+        const core = new THREE.Mesh(
+            new THREE.TorusGeometry(0.8, 0.07, 5, 12),
+            new THREE.MeshBasicMaterial({ color: 0xffffff })
+        );
+        portalGroup.add(core);
+
+        // Inner glow disc
+        const glow = new THREE.Mesh(
+            new THREE.CircleGeometry(3.0, 20),
+            new THREE.MeshBasicMaterial({ color: 0x2008a0, transparent: true, opacity: 0.38, side: THREE.DoubleSide })
+        );
+        portalGroup.add(glow);
+
+        // Portal light (illuminates exiting enemies)
+        const light = new THREE.PointLight(0x7030d0, 3.0, 18);
+        light.position.z = 2; // slightly toward the arena in local space
+        portalGroup.add(light);
+
+        // Position portal at spawn point, elevated so it's a standing gate
+        portalGroup.position.set(CFG.SPAWN_X, 3.2, 0);
+        scene.add(portalGroup);
+
+        particles.push({ type: 'portal', outerRing, innerRing1, innerRing2, core, glow, light, time: 0 });
+    }
+
     // ─── INIT ───
     function init() {
         detectMobile();
         initThree();
         buildArena();
+        buildPortal();
         buildCastle();
         buildHero();
         initLights();
@@ -59,19 +114,21 @@
     function initThree() {
         scene = new THREE.Scene();
         scene.background = new THREE.Color(0x0c0c18);
-        scene.fog = new THREE.FogExp2(0x0c0c18, 0.012);
+        scene.fog = new THREE.FogExp2(0x0c0c18, isMobile ? 0.02 : 0.012);
 
         camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.5, 200);
         camera.position.set(0, CFG.CAM_HEIGHT, CFG.CAM_DIST);
         camera.lookAt(0, 0, 0);
 
-        renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+        renderer = new THREE.WebGLRenderer({ canvas, antialias: !isMobile, alpha: false, powerPreference: 'high-performance' });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        renderer.shadowMap.enabled = true;
-        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 0.9;
+        renderer.setPixelRatio(isMobile ? Math.min(window.devicePixelRatio, 1) : Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = !isMobile;
+        if (!isMobile) {
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 0.9;
+        }
 
         clock = new THREE.Clock();
 
@@ -83,19 +140,21 @@
     }
 
     function initLights() {
-        ambientLight = new THREE.AmbientLight(0x303050, 0.6);
+        ambientLight = new THREE.AmbientLight(0x303050, isMobile ? 1.1 : 0.6);
         scene.add(ambientLight);
 
         dirLight = new THREE.DirectionalLight(0xffe8c0, 0.8);
         dirLight.position.set(-20, 30, 10);
-        dirLight.castShadow = true;
-        dirLight.shadow.mapSize.set(1024, 1024);
-        dirLight.shadow.camera.near = 1;
-        dirLight.shadow.camera.far = 80;
-        dirLight.shadow.camera.left = -50;
-        dirLight.shadow.camera.right = 50;
-        dirLight.shadow.camera.top = 35;
-        dirLight.shadow.camera.bottom = -35;
+        if (!isMobile) {
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.set(1024, 1024);
+            dirLight.shadow.camera.near = 1;
+            dirLight.shadow.camera.far = 80;
+            dirLight.shadow.camera.left = -50;
+            dirLight.shadow.camera.right = 50;
+            dirLight.shadow.camera.top = 35;
+            dirLight.shadow.camera.bottom = -35;
+        }
         scene.add(dirLight);
 
         const moonLight = new THREE.DirectionalLight(0x6080c0, 0.3);
@@ -173,39 +232,49 @@
         });
     }
 
+    // ─── MATERIAL HELPER ───
+    function mkMat(params) {
+        if (isMobile) {
+            const { roughness, metalness, emissive, emissiveIntensity, ...rest } = params;
+            return new THREE.MeshLambertMaterial(rest);
+        }
+        return new THREE.MeshStandardMaterial(params);
+    }
+
     // ─── BUILD ARENA ───
     function buildArena() {
         const gTex = grassTexture();
         gTex.repeat.set(8, 5);
         ground = new THREE.Mesh(
             new THREE.PlaneGeometry(CFG.ARENA_W, CFG.ARENA_H),
-            new THREE.MeshStandardMaterial({ map: gTex, roughness: 0.9, metalness: 0 })
+            mkMat({ map: gTex, roughness: 0.9, metalness: 0 })
         );
         ground.rotation.x = -Math.PI / 2;
-        ground.receiveShadow = true;
+        if (!isMobile) ground.receiveShadow = true;
         scene.add(ground);
 
         const rTex = roadTexture();
         rTex.repeat.set(10, 1);
         road = new THREE.Mesh(
             new THREE.PlaneGeometry(CFG.ARENA_W, CFG.ROAD_W),
-            new THREE.MeshStandardMaterial({ map: rTex, roughness: 0.85, metalness: 0.05 })
+            mkMat({ map: rTex, roughness: 0.85, metalness: 0.05 })
         );
         road.rotation.x = -Math.PI / 2;
         road.position.y = 0.02;
-        road.receiveShadow = true;
+        if (!isMobile) road.receiveShadow = true;
         scene.add(road);
 
         addEnvironment();
     }
 
     function addEnvironment() {
-        const treeMat = new THREE.MeshStandardMaterial({ color: 0x2a1a10, roughness: 0.9 });
-        const leafMat = new THREE.MeshStandardMaterial({ color: 0x1a4a20, roughness: 0.8 });
-        const darkLeafMat = new THREE.MeshStandardMaterial({ color: 0x0f3015, roughness: 0.8 });
-        const rockMat = new THREE.MeshStandardMaterial({ color: 0x454050, roughness: 0.85, metalness: 0.05 });
+        const treeMat = mkMat({ color: 0x2a1a10, roughness: 0.9 });
+        const leafMat = mkMat({ color: 0x1a4a20, roughness: 0.8 });
+        const darkLeafMat = mkMat({ color: 0x0f3015, roughness: 0.8 });
+        const rockMat = mkMat({ color: 0x454050, roughness: 0.85, metalness: 0.05 });
 
-        for (let i = 0; i < 25; i++) {
+        const treeCount = isMobile ? 10 : 25;
+        for (let i = 0; i < treeCount; i++) {
             const x = -35 + Math.random() * 70;
             const z = (Math.random() < 0.5 ? 1 : -1) * (5 + Math.random() * 18);
             if (Math.abs(z) < 5) continue;
@@ -213,39 +282,41 @@
             const trunkH = 2 + Math.random() * 3;
             const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.35, trunkH, 6), treeMat);
             trunk.position.set(x, trunkH / 2, z);
-            trunk.castShadow = true;
+            if (!isMobile) trunk.castShadow = true;
             scene.add(trunk);
 
             const leafR = 1.2 + Math.random() * 1.5;
             const leaf = new THREE.Mesh(
-                new THREE.SphereGeometry(leafR, 6, 5),
+                new THREE.SphereGeometry(leafR, isMobile ? 5 : 6, isMobile ? 4 : 5),
                 Math.random() > 0.5 ? leafMat : darkLeafMat
             );
             leaf.position.set(x, trunkH + leafR * 0.5, z);
             leaf.scale.y = 0.7 + Math.random() * 0.3;
-            leaf.castShadow = true;
+            if (!isMobile) leaf.castShadow = true;
             scene.add(leaf);
         }
 
-        for (let i = 0; i < 15; i++) {
+        const rockCount = isMobile ? 6 : 15;
+        for (let i = 0; i < rockCount; i++) {
             const x = -30 + Math.random() * 60;
             const z = (Math.random() < 0.5 ? 1 : -1) * (4 + Math.random() * 20);
             const s = 0.5 + Math.random() * 1.5;
             const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(s, 0), rockMat);
             rock.position.set(x, s * 0.4, z);
             rock.rotation.set(Math.random(), Math.random(), Math.random());
-            rock.castShadow = true;
+            if (!isMobile) rock.castShadow = true;
             scene.add(rock);
         }
 
-        const torchPositions = [
+        const allTorchPositions = [
             [-28, 0, -5], [-28, 0, 5], [-18, 0, -4], [-18, 0, 4],
             [0, 0, -5], [0, 0, 5], [18, 0, -4], [18, 0, 4], [30, 0, -5], [30, 0, 5]
         ];
+        const torchPositions = isMobile ? allTorchPositions.slice(0, 4) : allTorchPositions;
         torchPositions.forEach(([tx, , tz]) => {
             const pole = new THREE.Mesh(
                 new THREE.CylinderGeometry(0.08, 0.1, 2, 5),
-                new THREE.MeshStandardMaterial({ color: 0x3a2a1a })
+                mkMat({ color: 0x3a2a1a, roughness: 0.9 })
             );
             pole.position.set(tx, 1, tz);
             scene.add(pole);
@@ -487,6 +558,8 @@
         brute:  { hp: 60, speed: 1.5, damage: 12, xp: 25, color: 0x805030, radius: 0.7, scale: 1.3 },
         shield: { hp: 45, speed: 2, damage: 8, xp: 20, color: 0x6070a0, radius: 0.5, scale: 1, armor: 0.5 },
         boss:   { hp: 200, speed: 1.2, damage: 25, xp: 100, color: 0x802020, radius: 1.2, scale: 2 },
+        boss2:  { hp: 600, speed: 1.5, damage: 40, xp: 250, color: 0x4020a0, radius: 1.5, scale: 2.8 },
+        boss3:  { hp: 1500, speed: 2.0, damage: 70, xp: 500, color: 0x1a0a20, radius: 2.0, scale: 3.5 },
     };
 
     function spawnEnemy(type, waveNum) {
@@ -523,6 +596,120 @@
             group.add(eyeL);
             const eyeR = eyeL.clone(); eyeR.position.x = 0.2;
             group.add(eyeR);
+
+        } else if (type === 'boss2') {
+            // ── Shadow Titan: 4-armed purple colossus ──
+            const titanMat = new THREE.MeshStandardMaterial({ color: 0x4020a0, roughness: 0.5, metalness: 0.2 });
+            const darkMat  = new THREE.MeshStandardMaterial({ color: 0x20107a, roughness: 0.6 });
+            const hornMat  = new THREE.MeshStandardMaterial({ color: 0x080515, roughness: 0.4 });
+
+            // Torso
+            const torso = new THREE.Mesh(new THREE.BoxGeometry(2.0, 2.5, 1.6), titanMat);
+            torso.position.y = 2.3; torso.castShadow = true; group.add(torso);
+
+            // Head
+            const head = new THREE.Mesh(new THREE.SphereGeometry(0.65, 7, 5), darkMat);
+            head.position.y = 3.85; group.add(head);
+
+            // 4 Arms (2 per side, at staggered heights)
+            const armMat = new THREE.MeshStandardMaterial({ color: 0x30158a, roughness: 0.6 });
+            for (let side = -1; side <= 1; side += 2) {
+                for (let h = 0; h < 2; h++) {
+                    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.18, 1.7, 5), armMat);
+                    arm.position.set(side * 1.5, 2.9 - h * 0.9, 0.15);
+                    arm.rotation.z = side * (0.75 - h * 0.25);
+                    group.add(arm);
+                    // Claw/fist
+                    const fist = new THREE.Mesh(new THREE.SphereGeometry(0.18, 5, 4), armMat);
+                    fist.position.set(side * 2.5, 2.1 - h * 0.85, 0.15);
+                    group.add(fist);
+                }
+            }
+
+            // Crown of 6 horns
+            for (let i = 0; i < 6; i++) {
+                const angle = (i / 6) * Math.PI * 2;
+                const horn = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.75, 4), hornMat);
+                horn.position.set(Math.cos(angle) * 0.5, 4.4, Math.sin(angle) * 0.5);
+                horn.rotation.set(Math.sin(angle) * 0.5, 0, -Math.cos(angle) * 0.5);
+                group.add(horn);
+            }
+
+            // Glowing red-orange eyes
+            const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff3800 });
+            const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.1, 5, 4), eyeMat);
+            eyeL.position.set(-0.22, 3.9, 0.6); group.add(eyeL);
+            const eyeR = eyeL.clone(); eyeR.position.x = 0.22; group.add(eyeR);
+            const eyeGlow = new THREE.PointLight(0xff3000, 1.8, 7);
+            eyeGlow.position.set(0, 3.9, 0.6); group.add(eyeGlow);
+
+            // Aura glow
+            const aura = new THREE.Mesh(
+                new THREE.SphereGeometry(1.8, 6, 5),
+                new THREE.MeshBasicMaterial({ color: 0x6030ff, transparent: true, opacity: 0.08, side: THREE.DoubleSide })
+            );
+            aura.position.y = 2.5; group.add(aura);
+
+        } else if (type === 'boss3') {
+            // ── Death Wraith: colossal skeletal wraith ──
+            const robeMat  = new THREE.MeshStandardMaterial({ color: 0x100818, roughness: 0.7 });
+            const boneMat  = new THREE.MeshStandardMaterial({ color: 0x3a2a28, roughness: 0.75 });
+            const darkMat  = new THREE.MeshStandardMaterial({ color: 0x0a0510, roughness: 0.5 });
+
+            // Robe (flowing cone base)
+            const robe = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 0.6, 4.2, 10), robeMat);
+            robe.position.y = 2.1; robe.castShadow = true; group.add(robe);
+
+            // Torso (above robe)
+            const torso = new THREE.Mesh(new THREE.BoxGeometry(2.0, 2.2, 1.5), darkMat);
+            torso.position.y = 4.8; torso.castShadow = true; group.add(torso);
+
+            // Skull head (large, slightly flattened)
+            const skull = new THREE.Mesh(new THREE.SphereGeometry(0.9, 7, 5), boneMat);
+            skull.position.y = 6.1; skull.scale.y = 1.1; group.add(skull);
+
+            // Glowing green eye sockets
+            const sockMat = new THREE.MeshBasicMaterial({ color: 0x00ff80 });
+            const sockL = new THREE.Mesh(new THREE.SphereGeometry(0.13, 5, 4), sockMat);
+            sockL.position.set(-0.28, 6.2, 0.82); group.add(sockL);
+            const sockR = sockL.clone(); sockR.position.x = 0.28; group.add(sockR);
+            const eyeGlow = new THREE.PointLight(0x00ff80, 2.5, 10);
+            eyeGlow.position.set(0, 6.2, 0.5); group.add(eyeGlow);
+
+            // Long skeletal arms with claws
+            for (let side = -1; side <= 1; side += 2) {
+                const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 3.2, 5), boneMat);
+                arm.position.set(side * 1.8, 4.8, 0);
+                arm.rotation.z = side * 0.75;
+                group.add(arm);
+                // 3 claws
+                for (let c = -1; c <= 1; c++) {
+                    const claw = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.55, 3), boneMat);
+                    claw.position.set(side * 3.4 + c * 0.18, 3.4, 0);
+                    claw.rotation.z = side * 0.75 + c * 0.25;
+                    group.add(claw);
+                }
+            }
+
+            // Ethereal aura
+            const aura = new THREE.Mesh(
+                new THREE.SphereGeometry(2.2, 7, 5),
+                new THREE.MeshBasicMaterial({ color: 0x002030, transparent: true, opacity: 0.12, side: THREE.DoubleSide })
+            );
+            aura.position.y = 4.0; group.add(aura);
+
+            // Floating bone fragments
+            for (let i = 0; i < 5; i++) {
+                const bone = new THREE.Mesh(
+                    new THREE.BoxGeometry(0.12, 0.4, 0.08),
+                    new THREE.MeshBasicMaterial({ color: 0x4a3a30, transparent: true, opacity: 0.6 })
+                );
+                const ang = (i / 5) * Math.PI * 2;
+                bone.position.set(Math.cos(ang) * 2.0, 3.5 + Math.sin(ang * 2) * 0.5, Math.sin(ang) * 2.0);
+                bone.userData.orbitAngle = ang;
+                group.add(bone);
+            }
+
         } else if (type === 'shield') {
             const body = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.35, 1.2, 6), bodyMat);
             body.position.y = 0.8;
@@ -564,7 +751,7 @@
         }
 
         const hpBar = createHPBar(def.radius * 2);
-        hpBar.position.y = (type === 'boss' ? 4.2 : 1.6 * def.scale + 0.3);
+        hpBar.position.y = (type === 'boss3' ? 8.2 : type === 'boss2' ? 6.5 : type === 'boss' ? 4.2 : 1.6 * def.scale + 0.3);
         group.add(hpBar);
 
         const z = (Math.random() - 0.5) * (CFG.ROAD_W - 1);
@@ -633,7 +820,8 @@
         const count = 3 + Math.floor(waveNum * 1.5);
 
         if (CFG.BOSS_WAVES.includes(waveNum)) {
-            queue.push('boss');
+            const bossType = waveNum === 30 ? 'boss3' : waveNum === 20 ? 'boss2' : 'boss';
+            queue.push(bossType);
             for (let i = 0; i < count - 1; i++) queue.push(pickEnemyType(waveNum));
         } else {
             for (let i = 0; i < count; i++) queue.push(pickEnemyType(waveNum));
@@ -662,9 +850,14 @@
     function announceWave(num) {
         const el = $('wave-announce');
         const txt = $('wave-announce-text');
-        txt.textContent = CFG.BOSS_WAVES.includes(num) ? `⚠ БОСС — Волна ${num}` : `Волна ${num}`;
+        let msg;
+        if (num === 30) msg = `💀 ПРИЗРАК СМЕРТИ — Волна ${num}`;
+        else if (num === 20) msg = `👹 ТЕНЕВОЙ ТИТАН — Волна ${num}`;
+        else if (CFG.BOSS_WAVES.includes(num)) msg = `⚠ БОСС — Волна ${num}`;
+        else msg = `Волна ${num}`;
+        txt.textContent = msg;
         el.classList.remove('hidden');
-        setTimeout(() => el.classList.add('hidden'), 2200);
+        setTimeout(() => el.classList.add('hidden'), 2500);
     }
 
     // ─── UPGRADE SYSTEM ───
@@ -1358,7 +1551,8 @@
 
     function spawnDeathParticles(pos, type) {
         const color = ENEMY_TYPES[type]?.color || 0x808080;
-        for (let i = 0; i < 6; i++) {
+        const count = isMobile ? 3 : 6;
+        for (let i = 0; i < count; i++) {
             const p = new THREE.Mesh(
                 new THREE.BoxGeometry(0.15, 0.15, 0.15),
                 new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8 })
@@ -1563,6 +1757,13 @@
     }
 
     function updateEffects(dt) {
+        // Cap effect count on mobile to prevent GPU overload
+        const maxEffects = isMobile ? 20 : 60;
+        while (effects.length > maxEffects) {
+            const old = effects.shift();
+            if (old.mesh) scene.remove(old.mesh);
+        }
+
         for (let i = effects.length - 1; i >= 0; i--) {
             const eff = effects[i];
             eff.timer -= dt;
@@ -1593,6 +1794,19 @@
             if (p.type === 'torch') {
                 p.mesh.scale.setScalar(0.8 + Math.sin(p.time * 8) * 0.3);
                 p.mesh.position.y += Math.sin(p.time * 5) * 0.002;
+            } else if (p.type === 'portal') {
+                // Outer ring slowly rotates
+                p.outerRing.rotation.z += dt * 0.5;
+                // Inner rings spin fast in opposite directions
+                p.innerRing1.rotation.z += dt * 2.2;
+                p.innerRing2.rotation.z -= dt * 3.0;
+                // Core swirl
+                p.core.rotation.z -= dt * 1.4;
+                // Pulsing light
+                p.light.intensity = 2.5 + Math.sin(p.time * 4) * 1.2;
+                // Inner glow pulse
+                p.glow.material.opacity = 0.3 + Math.sin(p.time * 2.5) * 0.15;
+                // Animate orbital bone fragments of boss3 group if any (ignore)
             }
         });
 
@@ -1859,14 +2073,27 @@
             $('reroll-cd').textContent = `(${upgradeState.rerollCd} волн)`;
         });
 
-        const abilityHandler = (el, fn) => {
-            el.addEventListener('touchstart', e => { e.preventDefault(); fn(); });
-            el.addEventListener('click', e => { e.preventDefault(); fn(); });
-        };
-        abilityHandler($('btn-attack'), heroAttack);
-        abilityHandler($('btn-ability1'), heroDash);
-        abilityHandler($('btn-ability2'), heroElemental);
-        abilityHandler($('btn-ability3'), heroCastleShield);
+        // Auto-fire: hold button → fires repeatedly at given interval (cooldowns gate actual rate)
+        function setupAutoFire(el, fn, interval) {
+            let timer = null;
+            const start = (e) => {
+                e.preventDefault();
+                if (gameState !== 'playing') return;
+                fn();
+                timer = setInterval(() => { if (gameState === 'playing') fn(); }, interval);
+            };
+            const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+            el.addEventListener('touchstart', start, { passive: false });
+            el.addEventListener('touchend', stop);
+            el.addEventListener('touchcancel', stop);
+            el.addEventListener('mousedown', start);
+            el.addEventListener('mouseup', stop);
+            el.addEventListener('mouseleave', stop);
+        }
+        setupAutoFire($('btn-attack'), heroAttack, 100);
+        setupAutoFire($('btn-ability1'), heroDash, 200);
+        setupAutoFire($('btn-ability2'), heroElemental, 200);
+        setupAutoFire($('btn-ability3'), heroCastleShield, 200);
 
         $('speed-btn').addEventListener('click', () => {
             gameSpeed = gameSpeed === 1 ? 2 : 1;

@@ -65,9 +65,9 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a12; f
 #mobile-controls { position: absolute; bottom: 0; left: 0; width: 100%; z-index: 60; pointer-events: none; padding: 16px; display: flex; justify-content: space-between; align-items: flex-end; }
 #mobile-controls * { pointer-events: auto; }
 
-#joystick-zone { position: relative; width: 130px; height: 130px; }
-#joystick-base { position: absolute; bottom: 0; left: 0; width: 120px; height: 120px; background: rgba(255,255,255,0.06); border: 2px solid rgba(255,255,255,0.1); border-radius: 50%; display: flex; align-items: center; justify-content: center; }
-#joystick-thumb { width: 48px; height: 48px; background: rgba(255,255,255,0.15); border: 2px solid rgba(255,255,255,0.2); border-radius: 50%; transition: transform 0.05s; }
+#joystick-zone { position: relative; width: 180px; height: 180px; }
+#joystick-base { position: absolute; bottom: 0; left: 0; width: 165px; height: 165px; background: rgba(255,255,255,0.07); border: 2px solid rgba(255,255,255,0.15); border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+#joystick-thumb { width: 68px; height: 68px; background: rgba(255,255,255,0.18); border: 2px solid rgba(255,255,255,0.25); border-radius: 50%; transition: transform 0.05s; }
 
 #ability-buttons { display: flex; align-items: flex-end; gap: 10px; }
 .ability-btn { position: relative; width: 56px; height: 56px; border-radius: 50%; border: 2px solid rgba(180,150,90,0.3); background: rgba(30,25,40,0.7); backdrop-filter: blur(4px); cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #e8d8b0; overflow: hidden; }
@@ -111,5 +111,8 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a12; f
     #ability-buttons { gap: 6px; }
     .ability-btn { width: 48px; height: 48px; }
     .ability-btn.attack-btn { width: 60px; height: 60px; }
-    #joystick-base { width: 100px; height: 100px; }
+    #joystick-zone { width: 140px; height: 140px; }
+    #joystick-base { width: 128px; height: 128px; }
+    #joystick-thumb { width: 52px; height: 52px; }
+    #mobile-controls { padding: 8px; }
 }
