@@ -97,6 +97,14 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a12; f
 /* Controls visibility: always show when game is active, hide only with .hidden */
 #mobile-controls.hidden { display: none !important; }
 
+/* Multiplayer */
+.btn-mp { display: block; width: 100%; padding: 14px 20px; margin: 8px 0; border: none; border-radius: 10px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: all 0.2s; letter-spacing: 0.5px; background: linear-gradient(135deg, #1a7a5a, #115040); color: #80ffcc; box-shadow: 0 4px 15px rgba(0,200,120,0.25); }
+.btn-mp:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,200,120,0.35); }
+.mp-status-text { font-size: 1.05rem; color: #b0c8e0; margin: 12px 0 8px; line-height: 1.5; }
+.mp-countdown { font-size: 3.5rem; font-weight: 900; color: #f0c850; min-height: 64px; display: flex; align-items: center; justify-content: center; }
+.mp-pid-label { background: rgba(0,200,100,0.15); border: 1px solid rgba(0,200,100,0.35); border-radius: 8px; padding: 5px 14px; font-size: 0.85rem; color: #40e090; display: inline-block; margin: 6px auto; }
+.mp-pid-label.p2 { background: rgba(80,120,255,0.15); border-color: rgba(80,120,255,0.35); color: #80a0ff; }
+
 /* Responsive */
 @media (max-width: 480px) {
     .overlay-content { padding: 24px 16px; }

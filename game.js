@@ -31,6 +31,18 @@
     let ambientLight, dirLight, pointLights = [];
     let gameSpeed = 1;
 
+    // ─── MULTIPLAYER STATE ───
+    const MP_WS = 'ws://game.projectcrm.ru/ws';
+    let mpEnabled = false;
+    let mpSocket = null;
+    let mpPid = 0;          // 1 = host, 2 = client
+    let mpConnected = false;
+    let mpCdVal = 0;
+    let mpCdTimer = null;
+    let mpOpponentMesh = null;
+    let mpClientEnems = {};  // string(id) → {mesh,hp,maxHp,hpBar,type,radius}
+    let mpSyncTick = 0;
+
     // ─── DOM ───
     const $ = id => document.getElementById(id);
     const canvas = $('game-canvas');
@@ -113,8 +125,8 @@
     // ─── THREE.JS SETUP ───
     function initThree() {
         scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x0c0c18);
-        scene.fog = new THREE.FogExp2(0x0c0c18, isMobile ? 0.02 : 0.012);
+        scene.background = new THREE.Color(0x1a1a2e);
+        scene.fog = new THREE.FogExp2(0x1a1a2e, isMobile ? 0.016 : 0.007);
 
         camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.5, 200);
         camera.position.set(0, CFG.CAM_HEIGHT, CFG.CAM_DIST);
@@ -140,10 +152,12 @@
     }
 
     function initLights() {
-        ambientLight = new THREE.AmbientLight(0x303050, isMobile ? 1.1 : 0.6);
+        // Brighter ambient fill
+        ambientLight = new THREE.AmbientLight(0x506080, isMobile ? 1.6 : 1.2);
         scene.add(ambientLight);
 
-        dirLight = new THREE.DirectionalLight(0xffe8c0, 0.8);
+        // Main sun — stronger
+        dirLight = new THREE.DirectionalLight(0xffe8c0, 1.4);
         dirLight.position.set(-20, 30, 10);
         if (!isMobile) {
             dirLight.castShadow = true;
@@ -157,9 +171,15 @@
         }
         scene.add(dirLight);
 
-        const moonLight = new THREE.DirectionalLight(0x6080c0, 0.3);
+        // Moon backlight — brighter
+        const moonLight = new THREE.DirectionalLight(0x8090d0, 0.7);
         moonLight.position.set(15, 25, -20);
         scene.add(moonLight);
+
+        // Right-side fill light
+        const fillLight = new THREE.DirectionalLight(0xd0e8ff, 0.5);
+        fillLight.position.set(30, 15, 5);
+        scene.add(fillLight);
     }
 
     // ─── TEXTURE HELPERS ───
@@ -1037,12 +1057,11 @@
 
         if (style === 'sword') {
             const range = 3;
-            enemies.forEach(e => {
-                const dist = hero.position.distanceTo(e.mesh.position);
-                if (dist < range + e.radius) {
-                    damageEnemy(e, dmg);
-                }
-            });
+            if (!(mpEnabled && mpPid === 2)) {
+                enemies.forEach(e => {
+                    if (hero.position.distanceTo(e.mesh.position) < range + e.radius) damageEnemy(e, dmg);
+                });
+            }
             spawnSwordAOE(hero.position, range);
         } else if (style === 'bow') {
             const aimDir = autoAimDir(dir, CFG.ARROW_RANGE);
@@ -1053,31 +1072,52 @@
         } else if (style === 'chain') {
             const range = 6;
             const coneAngle = Math.PI / 3;
-            enemies.forEach(e => {
-                const dx = e.mesh.position.x - hero.position.x;
-                const dz = e.mesh.position.z - hero.position.z;
-                const dist = Math.sqrt(dx * dx + dz * dz);
-                if (dist < range + e.radius) {
-                    const enemyAngle = Math.atan2(dz, dx);
-                    const facingAngle = Math.atan2(dir.z, dir.x);
-                    let diff = enemyAngle - facingAngle;
-                    while (diff > Math.PI) diff -= Math.PI * 2;
-                    while (diff < -Math.PI) diff += Math.PI * 2;
-                    if (Math.abs(diff) < coneAngle) {
-                        damageEnemy(e, dmg);
-                        e.slowTimer = 2;
-                        e.slowFactor = 0.5;
+            if (!(mpEnabled && mpPid === 2)) {
+                enemies.forEach(e => {
+                    const dx = e.mesh.position.x - hero.position.x;
+                    const dz = e.mesh.position.z - hero.position.z;
+                    const dist = Math.sqrt(dx * dx + dz * dz);
+                    if (dist < range + e.radius) {
+                        const enemyAngle = Math.atan2(dz, dx);
+                        const facingAngle = Math.atan2(dir.z, dir.x);
+                        let diff = enemyAngle - facingAngle;
+                        while (diff > Math.PI) diff -= Math.PI * 2;
+                        while (diff < -Math.PI) diff += Math.PI * 2;
+                        if (Math.abs(diff) < coneAngle) {
+                            damageEnemy(e, dmg);
+                            e.slowTimer = 2;
+                            e.slowFactor = 0.5;
+                        }
                     }
-                }
-            });
+                });
+            }
             spawnChainConeEffect(hero.position, dir, range);
+        }
+
+        // MP client: forward attack to host for authoritative damage
+        if (mpEnabled && mpPid === 2 && mpSocket && mpSocket.readyState === WebSocket.OPEN) {
+            mpSocket.send(JSON.stringify({
+                type: 'atk', style,
+                x: hero.position.x, z: hero.position.z,
+                fx: dir.x, fz: dir.z, dmg
+            }));
         }
     }
 
     function autoAimDir(fallbackDir, range) {
-        const target = findNearestEnemy(hero.position, range);
-        if (target) {
-            const d = new THREE.Vector3().subVectors(target.mesh.position, hero.position);
+        let bestPos = null, bestDist = range || Infinity;
+        if (mpEnabled && mpPid === 2) {
+            // Client: aim at received enemy positions
+            Object.values(mpClientEnems).forEach(ce => {
+                const d = hero.position.distanceTo(ce.mesh.position);
+                if (d < bestDist) { bestDist = d; bestPos = ce.mesh.position; }
+            });
+        } else {
+            const t = findNearestEnemy(hero.position, range);
+            if (t) bestPos = t.mesh.position;
+        }
+        if (bestPos) {
+            const d = new THREE.Vector3().subVectors(bestPos, hero.position);
             d.y = 0;
             if (d.length() > 0.1) return d.normalize();
         }
@@ -1535,18 +1575,25 @@
 
     function spawnDmgNumber(pos, dmg) {
         const canvas = document.createElement('canvas');
-        canvas.width = 64; canvas.height = 32;
+        canvas.width = 128; canvas.height = 64;
         const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#ffcc00';
-        ctx.font = 'bold 24px sans-serif';
+        // Color by damage tier
+        const fill = dmg >= 80 ? '#ff4040' : dmg >= 35 ? '#ff9030' : dmg >= 15 ? '#ffe040' : '#ffffff';
+        ctx.font = 'bold 44px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(dmg.toString(), 32, 24);
+        // Dark outline
+        ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+        ctx.lineWidth = 7;
+        ctx.strokeText(dmg.toString(), 64, 48);
+        // Bright fill
+        ctx.fillStyle = fill;
+        ctx.fillText(dmg.toString(), 64, 48);
         const tex = new THREE.CanvasTexture(canvas);
-        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
-        sprite.position.set(pos.x + (Math.random() - 0.5), pos.y + 2, pos.z + (Math.random() - 0.5));
-        sprite.scale.set(1.5, 0.75, 1);
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+        sprite.position.set(pos.x + (Math.random() - 0.5) * 0.8, pos.y + 2.5, pos.z + (Math.random() - 0.5) * 0.8);
+        sprite.scale.set(2.8, 1.4, 1);
         scene.add(sprite);
-        effects.push({ mesh: sprite, timer: 0.8, fadeOut: true, rise: true });
+        effects.push({ mesh: sprite, timer: 1.1, fadeOut: true, rise: true });
     }
 
     function spawnDeathParticles(pos, type) {
@@ -1568,6 +1615,273 @@
         }
     }
 
+    // ─── MULTIPLAYER FUNCTIONS ───
+    function connectMP() {
+        mpEnabled = true;
+        if (mpSocket) { try { mpSocket.close(); } catch(e) {} mpSocket = null; }
+        mpClientEnems = {};
+        mpConnected = false;
+        updateMPOverlay('Подключение к серверу...', false);
+        showScreen('mp-overlay');
+
+        mpSocket = new WebSocket(MP_WS);
+
+        mpSocket.onopen = () => console.log('[MP] Socket open');
+
+        mpSocket.onmessage = (ev) => {
+            try { handleMPMsg(JSON.parse(ev.data)); }
+            catch (e) { console.error('[MP] Parse error', e); }
+        };
+
+        mpSocket.onerror = () => updateMPOverlay('Ошибка соединения. Проверьте интернет.', false);
+
+        mpSocket.onclose = () => {
+            if (mpEnabled && gameState === 'playing') {
+                showInlineNotice('Противник отключился');
+                if (mpOpponentMesh) { scene.remove(mpOpponentMesh); mpOpponentMesh = null; }
+            }
+            mpConnected = false;
+        };
+    }
+
+    function handleMPMsg(msg) {
+        switch (msg.type) {
+            case 'joined':
+                mpPid = msg.pid;
+                updateMPOverlay(
+                    mpPid === 1 ? '🏠 Вы — Хост (Игрок 1)\nОжидание Игрока 2...' : '🔗 Вы — Игрок 2\nХост найден, ожидание старта...',
+                    false, mpPid
+                );
+                break;
+            case 'full':
+                updateMPOverlay('Игра уже заполнена.\nПопробуйте позже.', false);
+                setTimeout(() => { mpEnabled = false; $('mp-overlay').classList.add('hidden'); }, 2500);
+                break;
+            case 'start':
+                mpConnected = true;
+                mpCdVal = msg.countdown;
+                runMPCountdown();
+                break;
+            case 'leave':
+                if (gameState === 'playing') {
+                    showInlineNotice('Противник покинул игру');
+                    if (mpOpponentMesh) { scene.remove(mpOpponentMesh); mpOpponentMesh = null; }
+                } else {
+                    updateMPOverlay('Противник отключился.', false);
+                }
+                mpConnected = false;
+                break;
+            // ─ Game messages (relayed) ─
+            case 'gs':  if (mpPid === 2) receiveGameState(msg); break;
+            case 'p2p': if (mpPid === 1) receiveP2Pos(msg);     break;
+            case 'atk': if (mpPid === 1) receiveP2Attack(msg);  break;
+            case 'go':  if (mpPid === 2 && gameState === 'playing') gameOver(msg.v === 1); break;
+        }
+    }
+
+    function updateMPOverlay(text, isCountdown, pid) {
+        $('mp-status').innerHTML = text.replace('\n', '<br>');
+        $('mp-countdown').textContent = isCountdown ? mpCdVal : '';
+        const pidEl = $('mp-pid-label');
+        if (pid) {
+            pidEl.textContent = pid === 1 ? '👑 Хост — Игрок 1' : '🎮 Клиент — Игрок 2';
+            pidEl.className = 'mp-pid-label' + (pid === 2 ? ' p2' : '');
+            pidEl.classList.remove('hidden');
+        } else {
+            pidEl.classList.add('hidden');
+        }
+    }
+
+    function runMPCountdown() {
+        if (mpCdTimer) clearInterval(mpCdTimer);
+        updateMPOverlay(`Игра начинается через`, true, mpPid);
+        mpCdTimer = setInterval(() => {
+            mpCdVal--;
+            if (mpCdVal <= 0) {
+                clearInterval(mpCdTimer); mpCdTimer = null;
+                $('mp-overlay').classList.add('hidden');
+                startNewGame();
+            } else {
+                updateMPOverlay('Игра начинается через', true, mpPid);
+            }
+        }, 1000);
+    }
+
+    function showInlineNotice(text) {
+        const el = document.createElement('div');
+        el.style.cssText = 'position:fixed;top:45%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.85);color:#fff;padding:14px 24px;border-radius:12px;font-size:1.1rem;z-index:200;pointer-events:none;text-align:center;border:1px solid rgba(255,255,255,0.15)';
+        el.textContent = text;
+        document.body.appendChild(el);
+        setTimeout(() => el.remove(), 3000);
+    }
+
+    function buildOpponentHero() {
+        if (mpOpponentMesh) scene.remove(mpOpponentMesh);
+        const g = new THREE.Group();
+        // P1 sees P2 as green; P2 sees P1 as blue
+        const col = mpPid === 1 ? 0x20b070 : 0x3060c0;
+        const bodyMat2 = new THREE.MeshStandardMaterial({ color: col, roughness: 0.6, metalness: 0.2 });
+        const skinMat2 = new THREE.MeshStandardMaterial({ color: 0xe0b090, roughness: 0.7 });
+        const body2 = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.35, 1.2, 8), bodyMat2);
+        body2.position.y = 1.2; g.add(body2);
+        const head2 = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6), skinMat2);
+        head2.position.y = 2.1; g.add(head2);
+        const shoulders2 = new THREE.Mesh(new THREE.BoxGeometry(1, 0.2, 0.4), bodyMat2);
+        shoulders2.position.y = 1.75; g.add(shoulders2);
+        // Label
+        const lc = document.createElement('canvas'); lc.width = 96; lc.height = 40;
+        const ctx = lc.getContext('2d');
+        ctx.fillStyle = mpPid === 1 ? '#40ff90' : '#60a0ff';
+        ctx.font = 'bold 28px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText(mpPid === 1 ? 'P2' : 'P1', 48, 30);
+        const lbl = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(lc), transparent: true, depthTest: false }));
+        lbl.position.y = 3.2; lbl.scale.set(1.6, 0.7, 1); g.add(lbl);
+        g.position.set(CFG.CASTLE_X + 8, 0, 2.5);
+        scene.add(g);
+        mpOpponentMesh = g;
+    }
+
+    // HOST → CLIENT: send full game state every 50 ms
+    function mpHostSend() {
+        if (!mpSocket || mpSocket.readyState !== WebSocket.OPEN) return;
+        mpSocket.send(JSON.stringify({
+            type: 'gs',
+            e: enemies.map(e => ({
+                id: e.mesh.id,
+                x: +(e.mesh.position.x.toFixed(1)),
+                z: +(e.mesh.position.z.toFixed(1)),
+                hp: e.hp, mhp: e.maxHp, t: e.type
+            })),
+            c: castleData.hp, mc: castleData.maxHp,
+            w: waveData.current, el: waveData.enemiesLeft,
+            bw: waveData.betweenWaves ? 1 : 0,
+            h1: [+(hero.position.x.toFixed(1)), +(hero.position.z.toFixed(1)), +(hero.rotation.y.toFixed(2))]
+        }));
+    }
+
+    // CLIENT → HOST: send own position every 50 ms
+    function mpClientSend() {
+        if (!mpSocket || mpSocket.readyState !== WebSocket.OPEN) return;
+        mpSocket.send(JSON.stringify({
+            type: 'p2p',
+            x: +(hero.position.x.toFixed(1)),
+            z: +(hero.position.z.toFixed(1)),
+            ry: +(hero.rotation.y.toFixed(2))
+        }));
+    }
+
+    // HOST receives CLIENT position
+    function receiveP2Pos(msg) {
+        if (mpOpponentMesh) {
+            mpOpponentMesh.position.set(msg.x, 0, msg.z);
+            mpOpponentMesh.rotation.y = msg.ry;
+        }
+    }
+
+    // CLIENT receives game state from HOST
+    function receiveGameState(msg) {
+        if (gameState !== 'playing') return;
+        castleData.hp = msg.c; castleData.maxHp = msg.mc;
+        waveData.current = msg.w; waveData.enemiesLeft = msg.el;
+        waveData.betweenWaves = msg.bw === 1;
+        if (mpOpponentMesh) {
+            mpOpponentMesh.position.set(msg.h1[0], 0, msg.h1[1]);
+            mpOpponentMesh.rotation.y = msg.h1[2];
+        }
+        syncClientEnems(msg.e);
+        if (msg.c <= 0 && gameState === 'playing') gameOver(false);
+        updateHUD();
+    }
+
+    // CLIENT: sync enemy display meshes to received state
+    function syncClientEnems(arr) {
+        const seen = new Set();
+        arr.forEach(ed => {
+            const sid = String(ed.id);
+            seen.add(sid);
+            const def = ENEMY_TYPES[ed.t] || ENEMY_TYPES.minion;
+            if (mpClientEnems[sid]) {
+                const ce = mpClientEnems[sid];
+                const prev = ce.hp;
+                ce.mesh.position.set(ed.x, 0, ed.z);
+                ce.hp = ed.hp;
+                if (prev > ed.hp && prev - ed.hp > 0) spawnDmgNumber(ce.mesh.position, prev - ed.hp);
+                updateEnemyHPBar(ce);
+            } else {
+                // Simple visual: sphere + optional boss marker
+                const group = new THREE.Group();
+                const sph = new THREE.Mesh(
+                    new THREE.SphereGeometry(def.radius * 0.85, 7, 5),
+                    new THREE.MeshBasicMaterial({ color: def.color })
+                );
+                sph.position.y = def.radius; group.add(sph);
+                if (ed.t === 'boss' || ed.t === 'boss2' || ed.t === 'boss3') {
+                    const crown = new THREE.Mesh(
+                        new THREE.ConeGeometry(def.radius * 0.4, def.radius * 0.9, 4),
+                        new THREE.MeshBasicMaterial({ color: ed.t === 'boss3' ? 0x00ff80 : ed.t === 'boss2' ? 0xff5500 : 0xff3030 })
+                    );
+                    crown.position.y = def.radius * 2.5; group.add(crown);
+                }
+                const hpBar = createHPBar(def.radius * 2);
+                hpBar.position.y = (ed.t === 'boss3' ? 8.2 : ed.t === 'boss2' ? 6.5 : ed.t === 'boss' ? 4.2 : 1.6 * (def.scale || 1) + 0.3);
+                group.add(hpBar);
+                group.position.set(ed.x, 0, ed.z);
+                scene.add(group);
+                mpClientEnems[sid] = { mesh: group, hp: ed.hp, maxHp: ed.mhp, hpBar, type: ed.t, radius: def.radius, armor: def.armor || 0 };
+            }
+        });
+        // Remove gone enemies
+        Object.keys(mpClientEnems).forEach(sid => {
+            if (!seen.has(sid)) {
+                spawnDeathParticles(mpClientEnems[sid].mesh.position, mpClientEnems[sid].type);
+                scene.remove(mpClientEnems[sid].mesh);
+                delete mpClientEnems[sid];
+            }
+        });
+    }
+
+    // HOST: apply P2 attack received from client
+    function receiveP2Attack(msg) {
+        const pos = new THREE.Vector3(msg.x, 0, msg.z);
+        const dir = new THREE.Vector3(msg.fx, 0, msg.fz);
+        const dmg = msg.dmg;
+        if (msg.style === 'sword') {
+            enemies.forEach(e => { if (pos.distanceTo(e.mesh.position) < 3 + e.radius) damageEnemy(e, dmg); });
+            spawnSwordAOE(pos, 3);
+        } else if (msg.style === 'chain') {
+            const cA = Math.PI / 3;
+            enemies.forEach(e => {
+                const dx = e.mesh.position.x - pos.x, dz = e.mesh.position.z - pos.z;
+                if (Math.sqrt(dx*dx + dz*dz) < 6 + e.radius) {
+                    let diff = Math.atan2(dz, dx) - Math.atan2(dir.z, dir.x);
+                    while (diff > Math.PI) diff -= Math.PI * 2;
+                    while (diff < -Math.PI) diff += Math.PI * 2;
+                    if (Math.abs(diff) < cA) { damageEnemy(e, dmg); e.slowTimer = 2; e.slowFactor = 0.5; }
+                }
+            });
+            spawnChainConeEffect(pos, dir, 6);
+        } else {
+            // bow / magic: spawn authoritative projectile on host
+            let best = null, bd = msg.style === 'bow' ? CFG.ARROW_RANGE : 15;
+            enemies.forEach(e => { const d = pos.distanceTo(e.mesh.position); if (d < bd) { bd = d; best = e; } });
+            let aimDir = dir.clone().normalize();
+            if (best) { const v = new THREE.Vector3().subVectors(best.mesh.position, pos); v.y = 0; if (v.length() > 0.1) aimDir = v.normalize(); }
+            spawnProjectile(pos, aimDir, dmg, msg.style === 'bow' ? 'arrow' : 'magic',
+                msg.style === 'bow' ? CFG.ARROW_SPEED : 20, msg.style === 'bow' ? CFG.ARROW_RANGE : 15);
+        }
+    }
+
+    // Per-frame MP sync tick
+    function mpUpdate(dt) {
+        if (!mpConnected) return;
+        mpSyncTick -= dt;
+        if (mpSyncTick <= 0) {
+            mpSyncTick = 0.05; // 50 ms
+            if (mpPid === 1) mpHostSend();
+            else mpClientSend();
+        }
+    }
+
     // ─── UPDATE LOOP ───
     function update(dt) {
         if (gameState !== 'playing') return;
@@ -1577,12 +1891,20 @@
         updateHeroMovement(dt);
         updateCooldowns(dt);
         updateProjectiles(dt);
-        updateEnemies(dt);
-        updateWaveSpawner(dt);
+
+        // MP client: enemy AI runs on host only
+        if (!(mpEnabled && mpPid === 2)) {
+            updateEnemies(dt);
+            updateWaveSpawner(dt);
+        }
+
         updateEffects(dt);
         updateParticles(dt);
         updateCamera(dt);
         updateHUD();
+
+        // Multiplayer sync
+        if (mpEnabled && mpConnected) mpUpdate(dt);
 
         if (heroData.shieldActive) {
             heroData.shieldTimer -= dt;
@@ -1650,6 +1972,9 @@
     }
 
     function updateProjectiles(dt) {
+        const isClient = mpEnabled && mpPid === 2;
+        const checkList = isClient ? Object.values(mpClientEnems) : enemies;
+
         for (let i = projectiles.length - 1; i >= 0; i--) {
             const p = projectiles[i];
             const move = p.speed * dt;
@@ -1658,24 +1983,25 @@
             p.dist += move;
 
             let hit = false;
-            for (const e of enemies) {
+            for (const e of checkList) {
                 const dx = p.mesh.position.x - e.mesh.position.x;
                 const dz = p.mesh.position.z - e.mesh.position.z;
                 const dist = Math.sqrt(dx * dx + dz * dz);
                 if (dist < e.radius + 0.3) {
-                    if (p.aoe > 0) {
-                        enemies.forEach(e2 => {
-                            if (e2.mesh.position.distanceTo(p.mesh.position) < p.aoe) {
-                                damageEnemy(e2, p.dmg);
-                            }
-                        });
-                        spawnCircleEffect(p.mesh.position, p.aoe, 0x8040d0, 0.3);
+                    if (!isClient) {
+                        // Host / solo: apply real damage
+                        if (p.aoe > 0) {
+                            enemies.forEach(e2 => {
+                                if (e2.mesh.position.distanceTo(p.mesh.position) < p.aoe) damageEnemy(e2, p.dmg);
+                            });
+                            spawnCircleEffect(p.mesh.position, p.aoe, 0x8040d0, 0.3);
+                        } else {
+                            damageEnemy(e, p.dmg);
+                        }
+                        if (p.slow > 0) { e.slowTimer = 2; e.slowFactor = p.slow; }
                     } else {
-                        damageEnemy(e, p.dmg);
-                    }
-                    if (p.slow > 0) {
-                        e.slowTimer = 2;
-                        e.slowFactor = p.slow;
+                        // Client: visual hit only (host handles damage)
+                        if (p.aoe > 0) spawnCircleEffect(p.mesh.position, p.aoe, 0x8040d0, 0.3);
                     }
                     hit = true;
                     break;
@@ -1855,9 +2181,12 @@
         initWaveData();
         initUpgradeState();
 
-        hero.position.set(CFG.CASTLE_X + 10, 0, 0);
+        // MP: offset player 2 slightly so heroes don't overlap at start
+        hero.position.set(CFG.CASTLE_X + 10, 0, mpEnabled && mpPid === 2 ? 2.5 : 0);
         hero.rotation.y = 0;
         updateHeroWeapon('bow');
+
+        if (mpEnabled) buildOpponentHero();
 
         if (saveData.crownEquipped) toggleCrown(true);
         else toggleCrown(false);
@@ -1867,7 +2196,8 @@
         hudEl.classList.remove('hidden');
         mobileCtrl.classList.remove('hidden');
 
-        startWave(1);
+        // Client doesn't start the wave — it receives wave state from host
+        if (!mpEnabled || mpPid === 1) startWave(1);
         updateHUD();
         updateUpgradesList();
     }
@@ -1920,6 +2250,11 @@
     function gameOver(victory) {
         gameState = victory ? 'victory' : 'defeat';
 
+        // Inform MP client of game outcome
+        if (mpEnabled && mpPid === 1 && mpSocket && mpSocket.readyState === WebSocket.OPEN) {
+            mpSocket.send(JSON.stringify({ type: 'go', v: victory ? 1 : 0 }));
+        }
+
         if (victory) {
             saveData.crownUnlocked = true;
             $('victory-score').textContent = `Счёт: ${heroData.score}`;
@@ -1933,7 +2268,7 @@
         if (heroData.score > (saveData.highScore || 0)) saveData.highScore = heroData.score;
         if (waveData.current > (saveData.bestLevel || 0)) saveData.bestLevel = waveData.current;
         saveData.run = null;
-        persistSave();
+        if (!mpEnabled) persistSave(); // Don't overwrite save in MP
     }
 
     function clearGameObjects() {
@@ -1943,6 +2278,9 @@
         projectiles = [];
         effects.forEach(e => { if (e.mesh) scene.remove(e.mesh); });
         effects = [];
+        // Clear MP client enemy meshes
+        Object.values(mpClientEnems).forEach(ce => scene.remove(ce.mesh));
+        mpClientEnems = {};
     }
 
     function returnToMenu() {
@@ -2049,6 +2387,14 @@
         document.addEventListener('keyup', e => { keys[e.code] = false; });
 
         $('btn-new-game').addEventListener('click', startNewGame);
+        $('btn-multiplayer').addEventListener('click', connectMP);
+        $('btn-mp-cancel').addEventListener('click', () => {
+            mpEnabled = false;
+            if (mpCdTimer) { clearInterval(mpCdTimer); mpCdTimer = null; }
+            if (mpSocket) { try { mpSocket.close(); } catch(e) {} mpSocket = null; }
+            mpConnected = false;
+            $('mp-overlay').classList.add('hidden');
+        });
         $('btn-continue').addEventListener('click', continueGame);
         $('btn-reset').addEventListener('click', () => {
             if (confirm('Сбросить все сохранения?')) resetSave();

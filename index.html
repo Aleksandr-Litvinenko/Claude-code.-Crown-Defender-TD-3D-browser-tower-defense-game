@@ -96,6 +96,7 @@
                     <div>Лучший уровень: <span id="best-level">0</span></div>
                 </div>
                 <button class="btn-primary" id="btn-new-game">Новая игра</button>
+                <button class="btn-mp" id="btn-multiplayer">🎮 Мультиплеер</button>
                 <button class="btn-secondary" id="btn-continue" style="display:none">Продолжить</button>
                 <button class="btn-danger" id="btn-reset">Сброс сохранений</button>
             </div>
@@ -148,6 +149,17 @@
 
         <!-- Damage flash -->
         <div id="damage-flash" class="hidden"></div>
+
+        <!-- Multiplayer overlay -->
+        <div id="mp-overlay" class="overlay hidden">
+            <div class="overlay-content">
+                <h2>🎮 Мультиплеер</h2>
+                <div id="mp-status" class="mp-status-text">Подключение...</div>
+                <div id="mp-countdown" class="mp-countdown"></div>
+                <div id="mp-pid-label" class="mp-pid-label hidden"></div>
+                <button class="btn-danger" id="btn-mp-cancel">Отмена</button>
+            </div>
+        </div>
     </div>
 
     <script src="vendor/three.min.js"></script>
