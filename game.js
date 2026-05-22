@@ -32,7 +32,8 @@
     let gameSpeed = 1;
 
     // ─── MULTIPLAYER STATE ───
-    const MP_WS = 'ws://game.projectcrm.ru/ws';
+    // Use same hostname as the page so it works on any domain
+    const MP_WS = `ws://${location.hostname}/ws`;
     let mpEnabled = false;
     let mpSocket = null;
     let mpPid = 0;          // 1 = host, 2 = client
@@ -1575,25 +1576,27 @@
 
     function spawnDmgNumber(pos, dmg) {
         const canvas = document.createElement('canvas');
-        canvas.width = 128; canvas.height = 64;
+        canvas.width = 96; canvas.height = 52;
         const ctx = canvas.getContext('2d');
-        // Color by damage tier
-        const fill = dmg >= 80 ? '#ff4040' : dmg >= 35 ? '#ff9030' : dmg >= 15 ? '#ffe040' : '#ffffff';
-        ctx.font = 'bold 44px sans-serif';
+        // Colour tiers: grey → yellow → orange → red
+        const fill = dmg >= 80 ? '#ff4444' : dmg >= 35 ? '#ff8822' : dmg >= 15 ? '#ffe033' : '#d8d8d8';
+        ctx.globalAlpha = 0.88;               // semi-transparent
+        ctx.font = 'bold 38px sans-serif';
         ctx.textAlign = 'center';
-        // Dark outline
-        ctx.strokeStyle = 'rgba(0,0,0,0.85)';
-        ctx.lineWidth = 7;
-        ctx.strokeText(dmg.toString(), 64, 48);
-        // Bright fill
+        ctx.lineJoin = 'round';
+        // Thin dark shadow for depth without heavy black border
+        ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+        ctx.lineWidth = 4;
+        ctx.strokeText(dmg.toString(), 48, 42);
         ctx.fillStyle = fill;
-        ctx.fillText(dmg.toString(), 64, 48);
+        ctx.fillText(dmg.toString(), 48, 42);
         const tex = new THREE.CanvasTexture(canvas);
-        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
-        sprite.position.set(pos.x + (Math.random() - 0.5) * 0.8, pos.y + 2.5, pos.z + (Math.random() - 0.5) * 0.8);
-        sprite.scale.set(2.8, 1.4, 1);
+        const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.88, depthTest: false, depthWrite: false });
+        const sprite = new THREE.Sprite(mat);
+        sprite.position.set(pos.x + (Math.random() - 0.5) * 0.7, pos.y + 2.2, pos.z + (Math.random() - 0.5) * 0.7);
+        sprite.scale.set(2.0, 1.1, 1);
         scene.add(sprite);
-        effects.push({ mesh: sprite, timer: 1.1, fadeOut: true, rise: true });
+        effects.push({ mesh: sprite, timer: 1.0, fadeOut: true, rise: true });
     }
 
     function spawnDeathParticles(pos, type) {
@@ -1618,27 +1621,41 @@
     // ─── MULTIPLAYER FUNCTIONS ───
     function connectMP() {
         mpEnabled = true;
+        mpPid = 0;
         if (mpSocket) { try { mpSocket.close(); } catch(e) {} mpSocket = null; }
         mpClientEnems = {};
         mpConnected = false;
-        updateMPOverlay('Подключение к серверу...', false);
+        // Show room-selection screen
+        hideAllScreens();
         showScreen('mp-overlay');
+        $('mp-room-select').classList.remove('hidden');
+        $('mp-lobby').classList.add('hidden');
+        $('btn-mp-start').classList.add('hidden');
+        $('mp-connect-status').textContent = 'Подключение к серверу…';
+        document.querySelectorAll('.btn-room').forEach(b => { b.disabled = true; });
 
         mpSocket = new WebSocket(MP_WS);
 
-        mpSocket.onopen = () => console.log('[MP] Socket open');
+        mpSocket.onopen = () => {
+            console.log('[MP] Socket open');
+            $('mp-connect-status').textContent = 'Выберите комнату:';
+        };
 
         mpSocket.onmessage = (ev) => {
             try { handleMPMsg(JSON.parse(ev.data)); }
             catch (e) { console.error('[MP] Parse error', e); }
         };
 
-        mpSocket.onerror = () => updateMPOverlay('Ошибка соединения. Проверьте интернет.', false);
+        mpSocket.onerror = () => {
+            $('mp-connect-status').textContent = '❌ Ошибка соединения. Проверьте интернет.';
+        };
 
         mpSocket.onclose = () => {
             if (mpEnabled && gameState === 'playing') {
                 showInlineNotice('Противник отключился');
                 if (mpOpponentMesh) { scene.remove(mpOpponentMesh); mpOpponentMesh = null; }
+            } else if (mpEnabled && gameState !== 'playing') {
+                $('mp-connect-status').textContent = '⚠️ Соединение разорвано.';
             }
             mpConnected = false;
         };
@@ -1646,37 +1663,90 @@
 
     function handleMPMsg(msg) {
         switch (msg.type) {
+
+            // ── Room list (lobby phase) ──────────────────────────────────
+            case 'rooms':
+                updateRoomButtons(msg.list);
+                break;
+
+            // ── Joined a room ────────────────────────────────────────────
             case 'joined':
                 mpPid = msg.pid;
+                $('mp-room-select').classList.add('hidden');
+                $('mp-lobby').classList.remove('hidden');
                 updateMPOverlay(
-                    mpPid === 1 ? '🏠 Вы — Хост (Игрок 1)\nОжидание Игрока 2...' : '🔗 Вы — Игрок 2\nХост найден, ожидание старта...',
+                    mpPid === 1
+                        ? '👑 Вы — Хост (Игрок 1)\nОжидание Игрока 2…'
+                        : '🔗 Вы — Игрок 2\nОжидание старта от хоста…',
                     false, mpPid
                 );
                 break;
-            case 'full':
-                updateMPOverlay('Игра уже заполнена.\nПопробуйте позже.', false);
-                setTimeout(() => { mpEnabled = false; $('mp-overlay').classList.add('hidden'); }, 2500);
+
+            // ── P2 arrived (P1 only) ─────────────────────────────────────
+            case 'p2joined':
+                updateMPOverlay('✅ Игрок 2 подключился!\nНажмите «Начать игру»', false, 1);
+                $('btn-mp-start').classList.remove('hidden');
                 break;
+
+            // ── Room full ────────────────────────────────────────────────
+            case 'full':
+                $('mp-connect-status').textContent = '⛔ Комната заполнена. Выберите другую.';
+                $('mp-room-select').classList.remove('hidden');
+                $('mp-lobby').classList.add('hidden');
+                break;
+
+            // ── Countdown start ──────────────────────────────────────────
             case 'start':
                 mpConnected = true;
                 mpCdVal = msg.countdown;
+                $('btn-mp-start').classList.add('hidden');
                 runMPCountdown();
                 break;
+
+            // ── Opponent left ────────────────────────────────────────────
             case 'leave':
                 if (gameState === 'playing') {
                     showInlineNotice('Противник покинул игру');
                     if (mpOpponentMesh) { scene.remove(mpOpponentMesh); mpOpponentMesh = null; }
                 } else {
-                    updateMPOverlay('Противник отключился.', false);
+                    updateMPOverlay('Противник отключился.', false, mpPid);
+                    $('btn-mp-start').classList.add('hidden');
                 }
                 mpConnected = false;
                 break;
-            // ─ Game messages (relayed) ─
+
+            // ── Game messages (relayed) ──────────────────────────────────
             case 'gs':  if (mpPid === 2) receiveGameState(msg); break;
             case 'p2p': if (mpPid === 1) receiveP2Pos(msg);     break;
             case 'atk': if (mpPid === 1) receiveP2Attack(msg);  break;
             case 'go':  if (mpPid === 2 && gameState === 'playing') gameOver(msg.v === 1); break;
         }
+    }
+
+    function updateRoomButtons(list) {
+        list.forEach(r => {
+            const btn = document.querySelector(`.btn-room[data-room="${r.id}"]`);
+            if (!btn) return;
+            const info = btn.querySelector('.room-info');
+            btn.className = 'btn-room';
+            if (r.state === 'active') {
+                info.textContent = '🎮 В игре';
+                btn.disabled = true;
+                btn.classList.add('room-full');
+            } else if (r.players >= 2) {
+                info.textContent = '2/2 — Заполнена';
+                btn.disabled = true;
+                btn.classList.add('room-full');
+            } else if (r.players === 1) {
+                info.textContent = '1/2 — Ждёт игрока ▶';
+                btn.disabled = false;
+                btn.classList.add('room-waiting');
+            } else {
+                info.textContent = '0/2 — Пусто';
+                btn.disabled = false;
+                btn.classList.add('room-open');
+            }
+        });
     }
 
     function updateMPOverlay(text, isCountdown, pid) {
@@ -1803,7 +1873,9 @@
             if (mpClientEnems[sid]) {
                 const ce = mpClientEnems[sid];
                 const prev = ce.hp;
-                ce.mesh.position.set(ed.x, 0, ed.z);
+                // Store target for smooth lerp in update loop
+                ce.targetX = ed.x;
+                ce.targetZ = ed.z;
                 ce.hp = ed.hp;
                 if (prev > ed.hp && prev - ed.hp > 0) spawnDmgNumber(ce.mesh.position, prev - ed.hp);
                 updateEnemyHPBar(ce);
@@ -1827,7 +1899,7 @@
                 group.add(hpBar);
                 group.position.set(ed.x, 0, ed.z);
                 scene.add(group);
-                mpClientEnems[sid] = { mesh: group, hp: ed.hp, maxHp: ed.mhp, hpBar, type: ed.t, radius: def.radius, armor: def.armor || 0 };
+                mpClientEnems[sid] = { mesh: group, hp: ed.hp, maxHp: ed.mhp, hpBar, type: ed.t, radius: def.radius, armor: def.armor || 0, targetX: ed.x, targetZ: ed.z };
             }
         });
         // Remove gone enemies
@@ -1876,7 +1948,7 @@
         if (!mpConnected) return;
         mpSyncTick -= dt;
         if (mpSyncTick <= 0) {
-            mpSyncTick = 0.05; // 50 ms
+            mpSyncTick = 0.033; // ~30 fps sync
             if (mpPid === 1) mpHostSend();
             else mpClientSend();
         }
@@ -1892,8 +1964,16 @@
         updateCooldowns(dt);
         updateProjectiles(dt);
 
-        // MP client: enemy AI runs on host only
-        if (!(mpEnabled && mpPid === 2)) {
+        // MP client: enemy AI runs on host only; locally lerp displayed positions
+        if (mpEnabled && mpPid === 2) {
+            const lerpRate = Math.min(1, dt * 18); // ~18× per second catch-up
+            Object.values(mpClientEnems).forEach(ce => {
+                if (ce.targetX !== undefined) {
+                    ce.mesh.position.x += (ce.targetX - ce.mesh.position.x) * lerpRate;
+                    ce.mesh.position.z += (ce.targetZ - ce.mesh.position.z) * lerpRate;
+                }
+            });
+        } else {
             updateEnemies(dt);
             updateWaveSpawner(dt);
         }
@@ -2388,12 +2468,33 @@
 
         $('btn-new-game').addEventListener('click', startNewGame);
         $('btn-multiplayer').addEventListener('click', connectMP);
+
+        // Room select buttons
+        document.querySelectorAll('.btn-room').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const roomId = parseInt(btn.getAttribute('data-room'), 10);
+                if (mpSocket && mpSocket.readyState === WebSocket.OPEN) {
+                    mpSocket.send(JSON.stringify({ type: 'join', room: roomId }));
+                }
+            });
+        });
+
+        // P1 start button
+        $('btn-mp-start').addEventListener('click', () => {
+            if (mpSocket && mpSocket.readyState === WebSocket.OPEN) {
+                mpSocket.send(JSON.stringify({ type: 'startReq' }));
+                $('btn-mp-start').classList.add('hidden');
+                updateMPOverlay('⏳ Запуск игры…', false, 1);
+            }
+        });
+
         $('btn-mp-cancel').addEventListener('click', () => {
             mpEnabled = false;
             if (mpCdTimer) { clearInterval(mpCdTimer); mpCdTimer = null; }
             if (mpSocket) { try { mpSocket.close(); } catch(e) {} mpSocket = null; }
             mpConnected = false;
             $('mp-overlay').classList.add('hidden');
+            showScreen('start-screen');
         });
         $('btn-continue').addEventListener('click', continueGame);
         $('btn-reset').addEventListener('click', () => {

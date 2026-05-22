@@ -154,9 +154,25 @@
         <div id="mp-overlay" class="overlay hidden">
             <div class="overlay-content">
                 <h2>🎮 Мультиплеер</h2>
-                <div id="mp-status" class="mp-status-text">Подключение...</div>
-                <div id="mp-countdown" class="mp-countdown"></div>
-                <div id="mp-pid-label" class="mp-pid-label hidden"></div>
+
+                <!-- Step 1: room selection -->
+                <div id="mp-room-select">
+                    <p class="mp-status-text" id="mp-connect-status">Подключение к серверу…</p>
+                    <div id="mp-room-list">
+                        <button class="btn-room" data-room="0" disabled>Комната 1 — <span class="room-info">…</span></button>
+                        <button class="btn-room" data-room="1" disabled>Комната 2 — <span class="room-info">…</span></button>
+                        <button class="btn-room" data-room="2" disabled>Комната 3 — <span class="room-info">…</span></button>
+                    </div>
+                </div>
+
+                <!-- Step 2: lobby (after joining a room) -->
+                <div id="mp-lobby" class="hidden">
+                    <div id="mp-status" class="mp-status-text">Ожидание…</div>
+                    <div id="mp-countdown" class="mp-countdown"></div>
+                    <div id="mp-pid-label" class="mp-pid-label hidden"></div>
+                    <button class="btn-primary hidden" id="btn-mp-start">▶ Начать игру</button>
+                </div>
+
                 <button class="btn-danger" id="btn-mp-cancel">Отмена</button>
             </div>
         </div>
