@@ -102,8 +102,25 @@ A **Reroll** button lets you reshuffle the 3 options (3-wave cooldown).
 | `styles.css` | Responsive UI, mobile controls, animations |
 | `game.js` | Three.js scene, game logic, combat, waves, saves |
 | `vendor/three.min.js` | Three.js r128 (local copy) |
+| `server.js` | Optional co-op relay — see [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md) |
 
-No build step. No dependencies beyond Three.js. No frameworks.
+No build step. No frameworks. The game itself has no dependencies beyond the
+bundled Three.js; only the optional co-op relay needs `ws`.
+
+## Co-op
+
+Two players can share a run through a small relay server (three rooms, two
+slots each). The game is playable without it — the relay is only needed for
+the lobby.
+
+```bash
+npm install ws
+node server.js
+```
+
+The client connects to `ws://<host>/ws`, without a port, so the relay has to
+sit behind a reverse proxy. Setup, the message protocol and the usual failure
+modes are in [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md).
 
 ## Save System
 
@@ -135,16 +152,22 @@ Targets mobile-first (portrait), also works in landscape and desktop.
 .
 ├── index.html              # Entry point
 ├── styles.css              # All styles
-├── game.js                 # All game logic (~1700 lines)
+├── game.js                 # All game logic (~2600 lines)
+├── server.js               # Optional co-op relay (needs `ws`)
 ├── vendor/
 │   └── three.min.js        # Three.js r128
-├── assets/
-│   └── textures/           # Reserved for future texture assets
+├── docs/
+│   └── MULTIPLAYER.md      # Relay setup and protocol
 ├── PRD_RESTART_CROWN_DEFENDER_TD.md  # Product requirements
 ├── README.md               # This file
-├── ARCHITECTURE.md          # Technical deep-dive
+├── ARCHITECTURE.md         # Technical deep-dive
+├── COMPARISON.md           # Same brief, built by Codex — what differs
 └── LICENSE
 ```
+
+All geometry is generated in code: there are no texture files in this
+repository. The [Codex build of the same brief](COMPARISON.md) went the other
+way.
 
 ## License
 
